@@ -1,0 +1,55 @@
+void
+WifiPhy::StartReceivePacket (Ptr<Packet> packet,
+                             WifiTxVector txVector,
+                             MpduType mpdutype,
+                             Ptr<Event> event)
+{
+  NS_LOG_FUNCTION (this << packet << txVector.GetMode () << txVector.GetPreambleType () << +mpdutype);
+  NS_ASSERT (IsStateRx ());
+  NS_ASSERT (m_endPlcpRxEvent.IsExpired ());
+  WifiMode txMode = txVector.GetMode ();
+
+  InterferenceHelper::SnrPer snrPer;
+  snrPer = m_interference.CalculatePlcpHeaderSnrPer (event);
+
+  NS_LOG_DEBUG ("snr(dB)=" << RatioToDb (snrPer.snr) << ", per=" << snrPer.per);
+  WifiMacHeader hdr;
+  packet->PeekHeader(hdr);
+  Address addr2= (hdr.GetAddr1());
+  std::cout<<"addrpckt:"<<addr2<<"\n";
+  Address addr=m_device->GetAddress();
+  std::cout<<"addrst:"<<addr<<"\n";
+
+  if (m_random->GetValue () > snrPer.per) //plcp reception succeeded
+    {
+      if ((IsModeSupported (txMode) || IsMcsSupported (txMode) ) && addr==addr2)
+        {
+          NS_LOG_DEBUG ("receiving plcp payload"); //endReceive is already scheduled
+          m_plcpSuccess = true;
+        }
+      else //mode is not allowed
+        {
+          NS_LOG_DEBUG ("drop packet because it was sent using an unsupported mode (" << txMode << ")");
+          NotifyRxDrop (packet);
+          m_plcpSuccess = false;
+          WifiPreamble preamble = txVector.GetPreambleType ();
+          m_endRxEvent.Cancel();
+          std::cout<<"cброс"<<"\n";
+          Ptr<Event> newevent;
+          newevent = m_interference.Add (packet,
+                              txVector,
+                              Time(0),
+                              event->GetRxPowerW());
+          m_endRxEvent = Simulator::Schedule (Time(0), &WifiPhy::EndReceive, this,packet, preamble, mpdutype, newevent);
+        }
+    }
+  else //plcp reception failed
+    {
+      NS_LOG_DEBUG ("drop packet because plcp preamble/header reception failed");
+      NotifyRxDrop (packet);
+      m_plcpSuccess = false;
+    }
+}
+
+
+wifi-phy-state-helper.cc line=335 закоменчено
