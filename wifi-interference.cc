@@ -16,62 +16,106 @@
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("WiFiInterference");
+/*
+class WiFiInterference: public Object
+{
+  public:
+  WiFiInterference();
+  virtual ~WiFiInterference();
+  static TypeId GetTypeId (void);
+  void Set_cur_time(Time m_cur_time);
+  Time Get_cur_time(void);
+  protected:
+  Time m_curtime;
+};
+TypeId
+WiFiInterference::GetTypeId (void)
+{
+  static TypeId tid = TypeId ("ns3::WiFiInterference")
+    .SetParent<Object> ()
+    .SetGroupName ("Wifi")
+    .AddAttribute("CurrTime",
+                   "time",
+                   TimeValue (MicroSeconds (0)),
+                   MakeTimeAccessor (&WiFiInterference::m_curtime),
+                    MakeTimeChecker ());
+return tid;
+}
+void
+WiFiInterference::Set_cur_time(Time m_cur_time)
+{
+  m_curtime = m_cur_time;
+}
+Time
+WiFiInterference::Get_cur_time(void)
+{
+  return m_curtime;
+}
+
+*/
+bool
+closest_check (NodeContainer cur, uint32_t i, Ptr<Node> sta, uint32_t size)
+{
+
+  Ptr<Node> stat = cur.Get(i);
+  auto mobil_cur = stat->GetObject<MobilityModel> ();
+  Vector position = mobil_cur->GetPosition ();
+  auto mob_sta = sta->GetObject<MobilityModel>();
+  Vector pos = mob_sta->GetPosition ();
+  double range = sqrt((pos.x - position.x)*(pos.x - position.x) + (pos.y - position.y)*(pos.y - position.y));
+  double dif=0;
+  bool flag = true;
+  //std::cout<<"range"<<i<<" = "<<range<<std::endl;
+  for (uint32_t j=0;j<size;j++)
+  {
+    if (j!=i)
+    {
+      Ptr<Node> aps = cur.Get(j);
+      auto mobil = aps->GetObject<MobilityModel>();
+      Vector p = mobil->GetPosition();
+
+      dif = sqrt((pos.x - p.x)*(pos.x - p.x) + (pos.y - p.y)*(pos.y - p.y));
+     // std::cout<<"dif"<<j<<" = "<<dif<<"\t";
+      if (dif<=range)
+      {
+        flag = false;
+      }
+
+
+    }
+  }
+  //std::cout<<std::endl;
+  return flag;
+}
+
 
 uint32_t RcvPktCount1 = 0;
-
 void
 ReceiveTrace1 (Ptr<const Packet> pkt, const Address &addr)
 {
   RcvPktCount1++;
-}
-
-uint32_t RcvPktCount2 = 0;
-
-void
-ReceiveTrace2 (Ptr<const Packet> pkt, const Address &addr)
-{
-  RcvPktCount2++;
-}
-
-uint32_t RcvPktCount3 = 0;
-
-void
-ReceiveTrace3 (Ptr<const Packet> pkt, const Address &addr)
-{
-  RcvPktCount3++;
-}
-
-uint32_t SndPktCount2 = 0;
-
-void
-SendTrace2 (Ptr<const Packet> pkt)
-{
-  SndPktCount2++;
+  //std::cout<<"rx1\n";
 }
 
 uint32_t SndPktCount1=0;
-
 void
 SendTrace1 (Ptr<const Packet> pkt)
 {
   SndPktCount1++;
+
+  //std::cout<<"rtx1\n";
 }
 
 
-uint32_t SndPktCount3=0;
 
-void
-SendTrace3 (Ptr<const Packet> pkt)
-{
-  SndPktCount3++;
-}
+
 int
 main (int argc, char *argv[])
 {
   Time::SetResolution (Time::US); //set time resolution to us
   Time simTime = Seconds (20);
   std::string phyMode ("OfdmRate6Mbps");
-  uint32_t packetSize = 100; // bytes
+  uint32_t packetSize = 1500; // bytes
   uint32_t numPackets = 1;
   uint32_t startvalue=0;
   uint32_t endvalue=0;
@@ -88,9 +132,17 @@ main (int argc, char *argv[])
   bool isEDCA = true;
   bool print_graph = false;
   bool colorcodemode = true;
+  double SquareSize = 100.0;
+  uint32_t pairs;
+  uint32_t lay=3;
+  //double c_frequency=2.4;
 
   CommandLine cmd;
 
+
+  cmd.AddValue ("lay", "lay", lay);
+  cmd.AddValue ("Pairs", " Amount of STAs and APs", pairs);
+  cmd.AddValue ("SqSize", " Determines size of field", SquareSize);
   cmd.AddValue ("color", "Enables colorcode functions", colorcodemode);
   cmd.AddValue ("phyMode", "Wi-Fi PHY mode", phyMode);
   cmd.AddValue ("packetSize", "size of application packet sent [bytes]", packetSize);
@@ -119,20 +171,24 @@ main (int argc, char *argv[])
   Config::SetDefault ("ns3::WifiRemoteStationManager::RtsCtsThreshold", StringValue ("2200"));
   // turn off fragmentation at IP layer
   Config::SetDefault ("ns3::WifiNetDevice::Mtu", StringValue ("2200"));
-  //Config::SetDefault ("ns3::WifiRemoteStationManager::MaxSlrc", UintegerValue (1));
-  Config::SetDefault("ns3::WifiRemoteStationManager::MaxSsrc", UintegerValue(1));
+  //Config::SetDefault ("ns3::WifiRemoteStationManager::MaxSlrc", UintegerValue (100));
+  //Config::SetDefault("ns3::WifiRemoteStationManager::MaxSsrc", UintegerValue(10));
   Config::SetDefault ("ns3::WifiPhy::TxPowerStart", DoubleValue (18.0206));
   Config::SetDefault ("ns3::WifiPhy::TxPowerEnd", DoubleValue (18.0206));
-  Config::SetDefault ("ns3::Txop::MinCw",UintegerValue(0) );
-  Config::SetDefault("ns3::Txop::MaxCw",UintegerValue(0));
+  //Config::SetDefault ("ns3::Txop::MinCw",UintegerValue(15) );
+  //Config::SetDefault("ns3::Txop::MaxCw",UintegerValue(1023));
   // Enabling/disebling color code
   Config::SetDefault("ns3::WifiPhy::ColorCodeMode", BooleanValue (colorcodemode));
   // set CCA threshold to -95 dBm
-  Config::SetDefault ("ns3::WifiPhy::EnergyDetectionThreshold", DoubleValue (cca));
-  Config::SetDefault ("ns3::WifiPhy::CcaMode1Threshold", DoubleValue (cca));
+  Config::SetDefault ("ns3::WifiPhy::EnergyDetectionThreshold", DoubleValue (-96.0));
+  Config::SetDefault ("ns3::WifiPhy::CcaMode1Threshold", DoubleValue (-62.0));
+  
+  pairs = lay*lay;
+  NodeContainer accesspoints;
+  accesspoints.Create (pairs);
 
   NodeContainer stations;
-  stations.Create (5);
+  stations.Create (pairs);
 
   // The below set of helpers will help us to put together the wifi NICs we want
   WifiHelper wifi;
@@ -150,7 +206,12 @@ main (int argc, char *argv[])
   channel->SetPropagationDelayModel (delayModel);
   //Configure propagation
   Ptr<LogDistancePropagationLossModel> loss = CreateObject<LogDistancePropagationLossModel> ();
-  loss->SetPathLossExponent (3.3);
+  loss->SetPathLossExponent (3);
+  Ptr <FriisPropagationLossModel> Friis_loss = CreateObject <FriisPropagationLossModel>();  
+  Ptr <ThreeLogDistancePropagationLossModel> Three_log_loss = CreateObject <ThreeLogDistancePropagationLossModel>();
+  
+  
+  //double custom_loss_model=40.05 + 20*std::log10(c_frequency/2.4) + 20*std::log10(SquareSize) + SquareSize*35*std::log10(SquareSize/10);
   channel->SetPropagationLossModel (loss);
   wifiPhy.SetChannel (channel);
 
@@ -158,148 +219,103 @@ main (int argc, char *argv[])
   // Set adhoc mode and select DCF/EDCA
   wifiMac.SetType ("ns3::AdhocWifiMac", "QosSupported", BooleanValue (isEDCA));
   // disable rate control
-  wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager", "DataMode", StringValue (phyMode));
-  NetDeviceContainer devices = wifi.Install (wifiPhy, wifiMac, stations);
+  wifi.SetRemoteStationManager ("ns3::MinstrelWifiManager");//, "DataMode", StringValue (phyMode));
+  NetDeviceContainer devices = wifi.Install (wifiPhy, wifiMac, accesspoints);
+  NetDeviceContainer devices2 = wifi.Install (wifiPhy, wifiMac, stations);
 
-  //For incrementing distance for collecting data
-  if (startvalue!=0)// what it is for?
-  {
-    distance=startvalue;
-  }
   //Set node positions
-  MobilityHelper mobility;
-  Ptr<RandomRectanglePositionAllocator> positionAlloc = CreateObject<RandomRectanglePositionAllocator> ();
-  positionAlloc->SetAttribute("X",StringValue ("ns3::UniformRandomVariable[Min=0.0|Max=100.0]"));
-  positionAlloc->SetAttribute("Y",StringValue ("ns3::UniformRandomVariable[Min=0.0|Max=100.0]"));
+
+
+  Ptr <UniformRandomVariable> squaresize = CreateObject <UniformRandomVariable>();
+  squaresize->SetAttribute("Min",DoubleValue (0.0));
+  squaresize->SetAttribute("Max",DoubleValue (SquareSize));
+
+
   
+  MobilityHelper mobility;
+  Ptr<GridPositionAllocator> positionAlloc = CreateObject<GridPositionAllocator> ();
+  positionAlloc->SetAttribute("DeltaX", DoubleValue (SquareSize));
+  positionAlloc->SetAttribute("DeltaY", DoubleValue (SquareSize));
+  positionAlloc->SetAttribute("GridWidth", UintegerValue (lay));
 
   mobility.SetPositionAllocator (positionAlloc);
   mobility.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
-  mobility.Install (stations);
+  mobility.Install (accesspoints);
 
-for (int i=0;i<5;i++)
+  MobilityHelper mobility2;
+
+
+bool check;
+for (uint32_t i=0;i<pairs;i++)
 {
-  Ptr<Node> stat = stations.Get(i);
-  auto mobil = stat->GetObject<MobilityModel> ();
-  Vector position = mobil->GetPosition ();
-
-std::cout << "X"<<i<<": " << position.x << std::endl;
-std::cout << "Y"<<i<<": " << position.x << std::endl;
-}
-
-Ptr<Node> stat = stations.Get(1);
+  Ptr<Node> stat = accesspoints.Get(i);
   auto mobil = stat->GetObject<MobilityModel> ();
   Vector position = mobil->GetPosition ();
 
 
+  //std::cout << "apX"<<i<<": " << position.x << std::endl;
+  //std::cout << "apY"<<i<<": " << position.y << std::endl;
 
-
-
-  NodeContainer acpts;
-  acpt.Create(1);
-
-WifiMacHelper wifiMac2;
-  // Set adhoc mode and select DCF/EDCA
-  wifiMac2.SetType ("ns3::AdhocWifiMac", "QosSupported", BooleanValue (isEDCA));
-  // disable rate control
-  wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager", "DataMode", StringValue (phyMode));
-  NetDeviceContainer devices = wifi.Install (wifiPhy, wifiMac2, acpts);
-
-MobilityHelper mobility2;
   Ptr<UniformDiscPositionAllocator> positionAlloc2 = CreateObject<UniformDiscPositionAllocator> ();
-  positionAlloc2.SetRho(linkRange);
-  positionAlloc2.SetX();
-  positionAlloc2.SetY();
+  do{
+  positionAlloc2->SetAttribute("rho",DoubleValue (linkRange));
+  positionAlloc2->SetAttribute("X",DoubleValue (position.x));
+  positionAlloc2->SetAttribute("Y",DoubleValue (position.y));
+  positionAlloc2->SetAttribute("Z",DoubleValue (position.z));
 
-
-
-
+  Ptr<Node> stap = stations.Get(i);
+  mobility2.SetPositionAllocator (positionAlloc2);
+  mobility2.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
+  mobility2.Install (stap);
+  check = closest_check(accesspoints,i,stap,pairs);
+  } while(!check) ;
+  //std::cout<<"staX"<<i<<" : "<<stations.Get(i)->GetObject<MobilityModel>()->GetPosition().x<<std::endl;
+  //std::cout<<"staY"<<i<<" : "<<stations.Get(i)->GetObject<MobilityModel>()->GetPosition().y<<std::endl;
+  
+}
 
 
   InternetStackHelper internet;
-  internet.Install (stations);
+  internet.Install (accesspoints);
+
+  InternetStackHelper internet2;
+  internet2.Install (stations);
 
   Ipv4AddressHelper ipv4;
   NS_LOG_INFO ("Assign IP Addresses.");
   ipv4.SetBase ("10.1.1.0", "255.255.255.0");
   Ipv4InterfaceContainer interfaces = ipv4.Assign (devices);
+  Ipv4InterfaceContainer interfaces2 = ipv4.Assign (devices2);
+  
 
-std::cout<<stations.GetN()<<"\n";
 
   ArpCache::PopulateArpCache ();
 
   //Install applications
 
- 
-    //Install client on station # 0 ap 1
-  UdpEchoClientHelper echoClient (interfaces.GetAddress (3),
+  for (uint32_t i=0;i<pairs;i++){
+  UdpEchoClientHelper echoClient (interfaces2.GetAddress (i),
                                   9); // The destination station is station # 1
   echoClient.SetAttribute ("MaxPackets", UintegerValue (numPackets));
   echoClient.SetAttribute ("Interval", TimeValue (packetInterval));
   echoClient.SetAttribute ("PacketSize", UintegerValue (packetSize));
 
-  ApplicationContainer clientApps = echoClient.Install (stations.Get (0));
+  ApplicationContainer clientApps = echoClient.Install (accesspoints.Get (i));
   clientApps.Start (clientStart);
   clientApps.Stop (simTime);
   clientApps.Get (0)->TraceConnectWithoutContext ("Tx", MakeCallback (&SendTrace1));
 
 
-  //Install client on station # 1 ap 2
-  UdpEchoClientHelper echoClient2 (interfaces.GetAddress (4),
-                                   9); // The destination station is station # 3
-  echoClient2.SetAttribute ("MaxPackets", UintegerValue (numPackets));
-  echoClient2.SetAttribute ("Interval", TimeValue (packetInterval));
-  echoClient2.SetAttribute ("PacketSize", UintegerValue (packetSize));
 
-  ApplicationContainer clientApps2 = echoClient2.Install (stations.Get (1));
-  clientApps2.Start (clientStart+dt_for_second);
-  clientApps2.Stop (simTime);
-  clientApps2.Get (0)->TraceConnectWithoutContext ("Tx", MakeCallback (&SendTrace2)); 
-
-
-  //Install client on station # 2 ap 3
-  UdpEchoClientHelper echoClient3 (interfaces.GetAddress (5),
-                                   9); // The destination station is station # 3
-  echoClient3.SetAttribute ("MaxPackets", UintegerValue (numPackets));
-  echoClient3.SetAttribute ("Interval", TimeValue (packetInterval));
-  echoClient3.SetAttribute ("PacketSize", UintegerValue (packetSize));
-
-  ApplicationContainer clientApps3 = echoClient3.Install (stations.Get (2));
-  clientApps3.Start (clientStart+dt_for_second);
-  clientApps3.Stop (simTime);
-  clientApps3.Get (0)->TraceConnectWithoutContext ("Tx", MakeCallback (&SendTrace3));
-
-
-//STAs
-
-
-  //Install server on station # 3 st 1 
   PacketSinkHelper server ("ns3::UdpSocketFactory",
-                           InetSocketAddress (interfaces.GetAddress (3), 9));
+                           InetSocketAddress (interfaces2.GetAddress (i), 9));
 
-  ApplicationContainer serverApps = server.Install (stations.Get (3));
+  ApplicationContainer serverApps = server.Install (stations.Get (i));
   serverApps.Start (serverStart);
   serverApps.Stop (simTime);
   serverApps.Get (0)->TraceConnectWithoutContext ("Rx", MakeCallback (&ReceiveTrace1));
-
-
-  //Install server on station # 4 st 2
-  PacketSinkHelper server2 ("ns3::UdpSocketFactory",
-                            InetSocketAddress (interfaces.GetAddress (4), 9));
-
-  ApplicationContainer serverApps2 = server2.Install (stations.Get (4));
-  serverApps2.Start (serverStart);//+dt_for_second);
-  serverApps2.Stop (simTime);
-  serverApps2.Get (0)->TraceConnectWithoutContext ("Rx", MakeCallback (&ReceiveTrace2));
-
-  //Install server on station # 5 st 1
-  PacketSinkHelper server3 ("ns3::UdpSocketFactory",
-                           InetSocketAddress (interfaces.GetAddress (5), 9));
-
-  ApplicationContainer serverApps3 = server3.Install (stations.Get (5));
-  serverApps3.Start (serverStart);
-  serverApps3.Stop (simTime);
-  serverApps3.Get (0)->TraceConnectWithoutContext ("Rx", MakeCallback (&ReceiveTrace3));
+  }
+  
 
   Simulator::Stop (simTime);
   Simulator::Run ();
@@ -311,26 +327,7 @@ std::cout<<stations.GetN()<<"\n";
     {
       NS_FATAL_ERROR ("Cannot open file " << outFileName);
     }
+  outStream <<RcvPktCount1 <<std::endl;
 
-  outStream << distance << "\t1:" << RcvPktCount1 <<"\t"<<SndPktCount1 << "\t2:" << RcvPktCount2 <<"\t" <<SndPktCount2<<std::endl;
-  if (endvalue!=0)
-  {
-    system((std::string("echo \"")+std::to_string(int(distance))+std::string(" ")+std::to_string(RcvPktCount1)+
-    std::string(" ")+std::to_string(RcvPktCount2)+std::string("\" >> results/combresult.txt")).c_str());
-    if (endvalue!=startvalue)
-    {
-      startvalue++;
-      system((std::string("./waf --run \"wifi-interference --CCA=")+std::to_string(cca)+
-      std::string(" --startvalue=")+std::to_string(startvalue)+std::string(" --endvalue=")+
-      std::to_string(endvalue)+std::string(" --linkRange=")+std::to_string(linkRange)+
-      std::string(" --graph=")+std::to_string(print_graph)+std::string(" --packetSize=")+
-      std::to_string(packetSize)+std::string("\"")).c_str());
-    }
-    else
-      if (print_graph)
-        system("python3 results/script.py");
-  }  
-  else 
-    system("> results/combresult.txt");
   return 0;
 }
