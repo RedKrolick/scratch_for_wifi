@@ -36,6 +36,7 @@
 #include "ht-configuration.h"
 #include "he-configuration.h"
 #include "wifi-mac-header.h"
+#include <fstream>
 
 namespace ns3 {
 
@@ -308,6 +309,22 @@ WifiPhy::GetTypeId (void)
                    PointerValue (),
                    MakePointerAccessor (&WifiPhy::m_postReceptionErrorModel),
                    MakePointerChecker<ErrorModel> ())
+    .AddAttribute ("EnablingColor",
+                   "Enable or disable Color Code Mode",
+                   BooleanValue(false),
+                   MakeBooleanAccessor(&WifiPhy::SetColorCodeModeSupported),
+                   MakeBooleanChecker())
+    .AddAttribute ("ColorCode",
+                   " 6 bit number representing colorcode of bss",
+                   UintegerValue(0),
+                   MakeUintegerAccessor(&WifiPhy::GetColorCode,
+                                        &WifiPhy::SetColorCode),
+                   MakeUintegerChecker<uint8_t>())
+    .AddAttribute ("EnergyRec",
+                    "Energy to drop",
+                    DoubleValue(-52.0),
+                    MakeDoubleAccessor (&WifiPhy::SetEnergyRecDbM),
+                   MakeDoubleChecker<double> ())
     .AddTraceSource ("PhyTxBegin",
                      "Trace source indicating a packet "
                      "has begun transmitting over the channel medium",
@@ -671,6 +688,29 @@ WifiPhy::SetShortPlcpPreambleSupported (bool enable)
 {
   NS_LOG_FUNCTION (this << enable);
   m_shortPreamble = enable;
+}
+
+void
+WifiPhy::SetColorCodeModeSupported(bool enable)
+{
+  m_enable_coloring = enable;
+}
+
+void
+WifiPhy::SetColorCode(uint8_t color)
+{
+  m_colorcode = color;
+}
+uint8_t 
+WifiPhy::GetColorCode(void) const
+{
+  return m_colorcode;
+}
+
+void
+WifiPhy::SetEnergyRecDbM(double energylvl)
+{
+  m_energylvl = energylvl;
 }
 
 bool
@@ -2273,6 +2313,8 @@ WifiPhy::CalculatePlcpPreambleAndHeaderDuration (WifiTxVector txVector)
     + GetPlcpSigA2Duration (preamble)
     + GetPlcpTrainingSymbolDuration (txVector)
     + GetPlcpSigBDuration (preamble);
+      duration = duration + MicroSeconds(12);
+    //std::cout<<" dur   "<<MicroSeconds(duration)<<std::endl;
   return duration;
 }
 
@@ -2341,7 +2383,7 @@ WifiPhy::NotifyMonitorSniffTx (Ptr<const Packet> packet, uint16_t channelFreqMhz
 void
 WifiPhy::SendPacket (Ptr<const Packet> packet, WifiTxVector txVector, MpduType mpdutype)
 {
-  std::cout<<"MAC : "<<m_device->GetAddress()<<" In send packet, time = "<<Simulator::Now().GetMicroSeconds()<<"\n";
+  //std::cout<<"MAC : "<<m_device->GetAddress()<<" In send packet, time = "<<Simulator::Now().GetMicroSeconds()<<"\n";
   NS_LOG_FUNCTION (this << packet << txVector.GetMode ()
                         << txVector.GetMode ().GetDataRate (txVector)
                         << txVector.GetPreambleType ()
@@ -2401,7 +2443,10 @@ WifiPhy::SendPacket (Ptr<const Packet> packet, WifiTxVector txVector, MpduType m
     {
       isFrameComplete = 0;
     }
-  WifiPhyTag tag (txVector, mpdutype, isFrameComplete);
+    uint8_t color = m_device->GetColorCode();
+    
+  WifiPhyTag tag (txVector, mpdutype, isFrameComplete,color);
+  //std::cout<<unsigned(tag.GetColorCode())<<std::endl;
   newPacket->AddPacketTag (tag);
 
   StartTx (newPacket, txVector, txDuration);
@@ -2412,6 +2457,9 @@ WifiPhy::StartReceivePreambleAndHeader (Ptr<Packet> packet, double rxPowerW, Tim
 {
   WifiPhyTag tag;
   bool found = packet->RemovePacketTag (tag);
+  //std::cout<<"pkt color "<<unsigned(tag.GetColorCode())<<std::endl;
+  
+  //std::cout<<tag.GetColorCode()<<std::endl;
   if (!found)
     {
       NS_FATAL_ERROR ("Received Wi-Fi Signal with no WifiPhyTag");
@@ -2463,7 +2511,7 @@ WifiPhy::StartReceivePreambleAndHeader (Ptr<Packet> packet, double rxPowerW, Tim
           return;
         }
     }
-
+  //std::cout<<"pkt color "<<unsigned(tag.GetColorCode())<<std::endl;
   MpduType mpdutype = tag.GetMpduType ();
   switch (m_state->GetState ())
     {
@@ -2487,14 +2535,17 @@ WifiPhy::StartReceivePreambleAndHeader (Ptr<Packet> packet, double rxPowerW, Tim
           return;
         }
       break;
+      
     case WifiPhyState::RX:
       NS_ASSERT (m_currentEvent != 0);
       if (m_frameCaptureModel != 0
           && m_frameCaptureModel->CaptureNewFrame (m_currentEvent, event))
         {
+          
           AbortCurrentReception ();
           NS_LOG_DEBUG ("Switch to new packet");
-          StartRx (packet, txVector, mpdutype, rxPowerW, rxDuration, event);
+
+          StartRx (packet, txVector, mpdutype, rxPowerW, rxDuration, event,tag.GetColorCode());
         }
       else
         {
@@ -2524,7 +2575,7 @@ WifiPhy::StartReceivePreambleAndHeader (Ptr<Packet> packet, double rxPowerW, Tim
       break;
     case WifiPhyState::CCA_BUSY:
     case WifiPhyState::IDLE:
-      StartRx (packet, txVector, mpdutype, rxPowerW, rxDuration, event);
+      StartRx (packet, txVector, mpdutype, rxPowerW, rxDuration, event, tag.GetColorCode());
       break;
     case WifiPhyState::SLEEP:
       NS_LOG_DEBUG ("drop packet because in sleep mode");
@@ -2556,53 +2607,97 @@ void
 WifiPhy::StartReceivePacket (Ptr<Packet> packet,
                              WifiTxVector txVector,
                              MpduType mpdutype,
-                             Ptr<Event> event)
+                             Ptr<Event> event,
+                             uint8_t color)
 {
   NS_LOG_FUNCTION (this << packet << txVector.GetMode () << txVector.GetPreambleType () << +mpdutype);
   NS_ASSERT (IsStateRx ());
   NS_ASSERT (m_endPlcpRxEvent.IsExpired ());
   WifiMode txMode = txVector.GetMode ();
-
+ 
   InterferenceHelper::SnrPer snrPer;
   snrPer = m_interference.CalculatePlcpHeaderSnrPer (event);
 
   NS_LOG_DEBUG ("snr(dB)=" << RatioToDb (snrPer.snr) << ", per=" << snrPer.per);
   WifiMacHeader hdr;
   packet->PeekHeader(hdr);
-  Address addr2= (hdr.GetAddr1());
-  std::cout<<"addr_pckt:"<<addr2<<"\n";
-  Address addr=m_device->GetAddress();
-  std::cout<<"addr_st:"<<addr<<"\n";
-
+ // Address addr2= (hdr.GetAddr1());
+  //Address addr=m_device->GetAddress();
+ // if ( WToDbm(m_currentEvent->GetRxPowerW()) < m_energylvl && WToDbm(m_currentEvent->GetRxPowerW()) > WifiPhy::GetCcaMode1Threshold())
+ // {  WifiPhy::SetEnergyRecDbM(WToDbm(m_currentEvent->GetRxPowerW()));std::cout<<m_energylvl<<"\n";}
+  //std::cout<<"addr_pckt:"<<addr2<<"\n";
+  //std::cout<<"addr_st:"<<addr<<"\n";
+  //std::cout<<WToDbm(m_currentEvent->GetRxPowerW())<<"rx\n"
+ // std::cout<<WifiPhy::GetCcaMode1Threshold()<<"cca\n";
+  //std::cout<<"in strpacket snrper.per: "<<snrPer.per<<"\n"; 
+  //double rxPowerDbm ;
+  uint8_t bsscolor = m_device->GetColorCode();
+  uint8_t pktcolor = color;
+  //std::cout<<"bss color"<<unsigned(bsscolor)<<std::endl;
+  //std::cout<<unsigned(pktcolor)<<std::endl;
   if (m_random->GetValue () > snrPer.per) //plcp reception succeeded
     {
-      if ((IsModeSupported (txMode) || IsMcsSupported (txMode) ) && addr==addr2)
+      if ((IsModeSupported (txMode) || IsMcsSupported (txMode))  && (bsscolor==pktcolor || !m_enable_coloring || WToDbm(m_currentEvent->GetRxPowerW()) >= m_energylvl))
         {
           NS_LOG_DEBUG ("receiving plcp payload"); //endReceive is already scheduled
           m_plcpSuccess = true;
+          //WifiPhy::SetCcaMode1Threshold(-62.0);
         }
       else //mode is not allowed
         {
           NS_LOG_DEBUG ("drop packet because it was sent using an unsupported mode (" << txMode << ")");
           NotifyRxDrop (packet);
           m_plcpSuccess = false;
-          WifiPreamble preamble = txVector.GetPreambleType ();
-          m_endRxEvent.Cancel();
-          std::cout<<"cброс"<<"\n";
-          Ptr<Event> newevent;
-          newevent = m_interference.Add (packet,
+          //m_state->SwitchToRx(CalculatePlcpPreambleAndHeaderDuration (txVector));
+          if (bsscolor!=pktcolor && m_enable_coloring && WToDbm(m_currentEvent->GetRxPowerW()) < m_energylvl)
+          {
+            
+            //std::cout<<"cброс"<<"\n";
+    //        rxPowerDbm = WToDbm(m_currentEvent->GetRxPowerW()) + 0.5;
+            //rxPowerDbm = WifiPhy::GetCcaMode1Threshold() + 1;
+            //WifiPhy::SetEdThreshold(rxPowerDbm);
+            //WifiPhy::SetCcaMode1Threshold(rxPowerDbm);
+            m_endRxEvent.Cancel();
+            m_interference.NotifyRxEnd ();
+            m_currentEvent = 0;
+            m_state->SwitchFromRxEndError (packet, snrPer.snr);
+            //WifiPreamble preamble = txVector.GetPreambleType ();
+            /*Ptr<Event> newevent;
+            newevent = m_interference.Add (packet,
                               txVector,
                               Time(0),
                               event->GetRxPowerW());
-          m_endRxEvent = Simulator::Schedule (Time(0), &WifiPhy::EndReceive, this,packet, preamble, mpdutype, newevent);
+            m_endRxEvent = Simulator::Schedule (Time(0), &WifiPhy::EndReceive, this,packet, preamble, mpdutype, newevent);
+            */
+             
+             /*else
+             {
+               
+             }
+             */
+          }
         }
     }
   else //plcp reception failed
     {
       NS_LOG_DEBUG ("drop packet because plcp preamble/header reception failed");
       NotifyRxDrop (packet);
+      //std::cout<<"reception_failure"<<snrPer.per<<"\n";
       m_plcpSuccess = false;
+      if (bsscolor!=pktcolor && m_enable_coloring && WToDbm(m_currentEvent->GetRxPowerW()) < m_energylvl)
+          {
+           // rxPowerDbm = WifiPhy::GetCcaMode1Threshold() + 4;
+            //WifiPhy::SetCcaMode1Threshold(rxPowerDbm);
+            
+            //std::cout<<"cброс"<<"\n";
+            m_endRxEvent.Cancel();
+            m_interference.NotifyRxEnd ();
+            m_currentEvent = 0;
+            m_state->SwitchFromRxEndError (packet, snrPer.snr);
+          }
     }
+
+    //std::cout<<"state: "<<m_state->GetState ()<<"\n";
 }
 
 
@@ -2611,14 +2706,16 @@ WifiPhy::EndReceive (Ptr<Packet> packet, WifiPreamble preamble, MpduType mpdutyp
 {
   NS_LOG_FUNCTION (this << packet << event);
   NS_ASSERT (IsStateRx ());
-  std::cout<<"state=rx "<<"addr_st:"<<m_device->GetAddress()<<" time_stapm: "<<Simulator::Now().GetMicroSeconds()<<"\n";
+  //std::cout<<"endreceive addr_st: "<<m_device->GetAddress()<<" now: "<<Simulator::Now().GetMicroSeconds()<<"\n";
+  /*std::ofstream outStream;
+  outStream.open ("result.txt", std::ios_base::ate);
+  outStream << Simulator::Now().GetMicroSeconds()<<std::endl;
+  outStream.close();*/
   NS_ASSERT (event->GetEndTime () == Simulator::Now ());
-
   InterferenceHelper::SnrPer snrPer;
   snrPer = m_interference.CalculatePlcpPayloadSnrPer (event);
   m_interference.NotifyRxEnd ();
   m_currentEvent = 0;
-
   if (m_plcpSuccess == true)
     {
       NS_LOG_DEBUG ("mode=" << (event->GetPayloadMode ().GetDataRate (event->GetTxVector ())) <<
@@ -2630,6 +2727,7 @@ WifiPhy::EndReceive (Ptr<Packet> packet, WifiPreamble preamble, MpduType mpdutyp
       // Receive error model is optional, if we have an error model and
       // it indicates that the packet is corrupt, drop the packet.
       //
+      //std::cout<<"snrper.per: "<<snrPer.per<<"\n"; 
       if (m_random->GetValue () > snrPer.per &&
           !(m_postReceptionErrorModel && m_postReceptionErrorModel->IsCorrupt (packet)))
         {
@@ -2646,6 +2744,7 @@ WifiPhy::EndReceive (Ptr<Packet> packet, WifiPreamble preamble, MpduType mpdutyp
       else
         {
           /* failure. */
+          //std::cout<<"failure\n";
           NotifyRxDrop (packet);
           m_state->SwitchFromRxEndError (packet, snrPer.snr);
         }
@@ -3692,11 +3791,13 @@ WifiPhy::AbortCurrentReception ()
 }
 
 void
-WifiPhy::StartRx (Ptr<Packet> packet, WifiTxVector txVector, MpduType mpdutype, double rxPowerW, Time rxDuration, Ptr<Event> event)
+WifiPhy::StartRx (Ptr<Packet> packet, WifiTxVector txVector, MpduType mpdutype, double rxPowerW, Time rxDuration, Ptr<Event> event,uint8_t colorcode)
 {
   NS_LOG_FUNCTION (this << packet << txVector << +mpdutype << rxPowerW << rxDuration);
+  //std::cout<<"startrx_start_from "<<m_device->GetAddress()<<"\n";
   if (rxPowerW > m_edThresholdW) //checked here, no need to check in the payload reception (current implementation assumes constant rx power over the packet duration)
     {
+      //std::cout<<"rxPowerW > m_edThresholdW"<<"\n";
       AmpduTag ampduTag;
       WifiPreamble preamble = txVector.GetPreambleType ();
       if (preamble == WIFI_PREAMBLE_NONE && (m_mpdusNum == 0 || m_plcpSuccess == false))
@@ -3750,7 +3851,7 @@ WifiPhy::StartRx (Ptr<Packet> packet, WifiTxVector txVector, MpduType mpdutype, 
           NS_ASSERT (m_endPlcpRxEvent.IsExpired ());
           Time preambleAndHeaderDuration = CalculatePlcpPreambleAndHeaderDuration (txVector);
           m_endPlcpRxEvent = Simulator::Schedule (preambleAndHeaderDuration, &WifiPhy::StartReceivePacket, this,
-                                                  packet, txVector, mpdutype, event);
+                                                  packet, txVector, mpdutype, event,colorcode);
         }
 
       NS_ASSERT (m_endRxEvent.IsExpired ());
